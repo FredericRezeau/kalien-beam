@@ -10,11 +10,13 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
-#include <cuda.h>
-#include <cuda_runtime.h>
 #include <sstream>
 #include <string>
 #include <vector>
+
+#ifndef CPU_ONLY
+#include <cuda.h>
+#include <cuda_runtime.h>
 
 #ifndef __CUDACC__
 #ifndef __device__
@@ -38,6 +40,19 @@ static inline float __fsqrt_rn(float x) { return sqrtf(x); }
 extern "C" void runSearch(int device, uint32_t seed, uint32_t salt, int32_t width, int32_t horizon, int32_t frames, int32_t wave,
     int32_t branches, int32_t* outScore, uint8_t* outTape, int32_t* outFrames, const std::chrono::steady_clock::time_point& start,
     JitKernel* jit, bool trace);
+
+#else
+
+// CPU-only build: bring in the CPU sim, no CUDA.
+#include "ports/sim.h"
+#include "tape.h"
+
+#endif
+
+// CPU kernel is always compiled in (GPU build: enables --cpu; CPU build: sole backend).
+#include "kernel.h"
+
+// ---------------------------------------------------------------------------
 
 static std::string getPath(const std::string& path, uint32_t salt, int32_t score) {
     std::string stem = path;
@@ -67,21 +82,25 @@ static void usage(const char* prog) {
         "  --seed         <hex|dec>  Kalien contract seed\n"
         "  --out          <path>     Output tape base path (suffix _<salt>_<score>.tape added)\n\n"
         "Options:\n"
+#ifndef CPU_ONLY
         "  --fitness      <path>     CUDA source file (.cu) for custom fitness function (JIT NVRTC compiled).\n"
+        "  --device       <n>        GPU device index (default: 0)\n"
+        "  --cpu                     Use CPU beam search\n"
+#endif
         "  --beam         <n>        Beam width (default: 16384)\n"
         "  --branches     <n>        Branches explored, 1..8 (default: 8)\n"
         "  --horizon      <n>        Lookahead depth in frames (default: 20)\n"
         "  --frames       <n>        Total simulation frames (default: 36000)\n"
         "  --salt         <hex|dec>  Salt value (default: 0)\n"
         "  --wave         <n>        Lurk mode activation threshold (default: 7; 0 = disable)\n"
-        "  --iterations   <n>        Number of runs (default: 1)\n"
-        "  --device       <n>        GPU device index (default: 0)\n", prog);
+        "  --threads      <n>        Number of threads (default: 0; 0 = max)\n"
+        "  --iterations   <n>        Number of runs (default: 1)\n", prog);
 }
 
 int main(int argc, char* argv[]) {
     std::printf(
         "KALIEN BEAM\n"
-        "░▒▓▶ GPU-POWERED BEAM SEARCH\n"
+        "░▒▓▶ BEAM SEARCH\n"
         "v1.0.0\n"
         "\n");
 
@@ -95,6 +114,8 @@ int main(int argc, char* argv[]) {
     uint32_t salt = 0;
     int32_t iterations = 1;
     int32_t device = 0;
+    bool useCPU = false;
+    int32_t threads = 0;
     std::string outPath;
     std::string fitnessPath;
     bool trace = false;
@@ -123,7 +144,11 @@ int main(int argc, char* argv[]) {
             salt = (uint32_t)std::stoul(argv[++i], nullptr, 0);
         } else if (!strcmp(argv[i], "--iterations") && i + 1 < argc) {
             iterations = std::stoi(argv[++i]);
-        } else if (!strcmp(argv[i], "--trace") && i + 1 < argc) {
+        } else if (!strcmp(argv[i], "--cpu")) {
+            useCPU = true;
+        } else if (!strcmp(argv[i], "--threads") && i + 1 < argc) {
+            threads = std::stoi(argv[++i]);
+        } else if (!strcmp(argv[i], "--trace")) {
             trace = true;
         } else {
             std::fprintf(stderr, "Unknown argument: %s\n", argv[i]);
@@ -137,24 +162,38 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
+#ifdef CPU_ONLY
+    useCPU = true;
+#endif
+
     std::printf("[ENGINE] Warming up...\n");
-    std::printf("[ENGINE] device=%d seed=0x%08X salt=0x%08X\n", device, seed, salt);
+    std::printf("[ENGINE] mode=%s seed=0x%08X salt=0x%08X\n",
+                useCPU ? "CPU" : "GPU", seed, salt);
     std::printf("[ENGINE] Flight plan -> width=%d branches=%d horizon=%d frames=%d iterations=%d wave=%s\n",
-                width, branches, horizon, frames, iterations, wave > 0 ? std::to_string(wave).c_str() : "disabled");
-    int len = 0;
-    cudaGetDeviceCount(&len);
-    for (int d = 0; d < len; d++) {
-        cudaDeviceProp prop;
-        cudaGetDeviceProperties(&prop, d);
-        std::printf("[WEAPON:%d] %s compute=%d.%d SMs=%d mem=%zuMB memBW=%.0fGB/s clockMHz=%d\n",
-            d, prop.name, prop.major, prop.minor, prop.multiProcessorCount,
-            prop.totalGlobalMem / (1024 * 1024), 2.0 * prop.memoryClockRate * (prop.memoryBusWidth / 8) / 1e6, prop.clockRate / 1000);
+                width, branches, horizon, frames, iterations,
+                wave > 0 ? std::to_string(wave).c_str() : "disabled");
+
+#ifndef CPU_ONLY
+    if (!useCPU) {
+        int len = 0;
+        cudaGetDeviceCount(&len);
+        for (int d = 0; d < len; d++) {
+            cudaDeviceProp prop;
+            cudaGetDeviceProperties(&prop, d);
+            std::printf("[WEAPON:%d] %s compute=%d.%d SMs=%d mem=%zuMB memBW=%.0fGB/s clockMHz=%d\n",
+                d, prop.name, prop.major, prop.minor, prop.multiProcessorCount,
+                prop.totalGlobalMem / (1024 * 1024),
+                2.0 * prop.memoryClockRate * (prop.memoryBusWidth / 8) / 1e6,
+                prop.clockRate / 1000);
+        }
     }
+#endif
     std::fflush(stdout);
 
+#ifndef CPU_ONLY
     JitKernel kernel;
     JitKernel* jit = nullptr;
-    if (!fitnessPath.empty()) {
+    if (!useCPU && !fitnessPath.empty()) {
         std::string arch = getArch(device);
         std::printf("[MATRIX] Compiling from '%s' (arch=%s)...\n", fitnessPath.c_str(), arch.c_str());
         kernel = compile(fitnessPath.c_str(), "kernel.cu", "ports/sim.cuh", arch.c_str(), device);
@@ -163,20 +202,34 @@ int main(int argc, char* argv[]) {
         std::printf("[MATRIX] Loading built-in heuristic.\n");
     }
     std::printf("[MATRIX] Online.\n");
-
+#else
+    std::printf("[MATRIX] Loading built-in heuristic.\n");
+    std::printf("[MATRIX] Online.\n");
+#endif
+    std::fflush(stdout);
     const int32_t bytes = (frames + 1) >> 1;
     std::vector<uint8_t> bestTape(bytes, 0);
     int32_t bestScore = -1;
     int32_t bestFrames = 0;
     uint32_t bestSalt = salt;
     uint32_t curSalt = salt;
-    int32_t totalRuns = 0;
     auto start = std::chrono::steady_clock::now();
+
     for (int32_t iter = 0; iter < iterations; iter++) {
-        totalRuns++;
         std::vector<uint8_t> tape(bytes, 0);
         int32_t outScore = 0, outFrames = 0;
-        runSearch(device, seed, curSalt, width, horizon, frames, wave, branches, &outScore, tape.data(), &outFrames, start, jit, trace);
+
+        if (useCPU) {
+            runSearchCPU(seed, curSalt, width, horizon, frames, wave, branches, threads,
+                         &outScore, tape.data(), &outFrames, start, trace);
+        }
+#ifndef CPU_ONLY
+        else {
+            runSearch(device, seed, curSalt, width, horizon, frames, wave, branches,
+                      &outScore, tape.data(), &outFrames, start, jit, trace);
+        }
+#endif
+
         if (outScore > bestScore) {
             bestScore = outScore;
             bestFrames = outFrames;
@@ -187,7 +240,8 @@ int main(int argc, char* argv[]) {
                 std::fprintf(stderr, "Error: could not write %s\n", path.c_str());
                 break;
             }
-            std::printf("[ARTIFACT] Recovered -> seed=0x%08X salt=0x%08X score=%07d frames=%05d\n", seed, bestSalt, bestScore, bestFrames);
+            std::printf("[ARTIFACT] Recovered -> seed=0x%08X salt=0x%08X score=%07d frames=%05d\n",
+                        seed, bestSalt, bestScore, bestFrames);
             std::printf("[ARTIFACT] Archived -> %s\n", path.c_str());
         }
         curSalt++;
@@ -196,8 +250,10 @@ int main(int argc, char* argv[]) {
     std::printf("[ENGINE] iterations=%d best=%07d salt=0x%08X\n", iterations, bestScore, bestSalt);
     std::printf("[ENGINE] Shutdown.\n");
 
-    if (jit) {
+#ifndef CPU_ONLY
+    if (!useCPU && jit) {
         cuModuleUnload(jit->module);
     }
+#endif
     return 0;
 }

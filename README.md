@@ -7,7 +7,7 @@
 
 If you want to grind KALIEN **by the million per tape**, `kalien-beam` aims your GPU deep into the asteroid belt and lets the beam search rip. No wasted shots.
 
-**kalien-beam** is a CUDA-powered beam search engine built for [kalien.xyz](https://kalien.xyz), a remake of the 1979 Atari classic Asteroids, warp-powered by ZK proofs on Stellar. 
+**kalien-beam** is a CUDA-beam search engine built for [kalien.xyz](https://kalien.xyz), a remake of the 1979 Atari classic Asteroids, warp-powered by ZK proofs on Stellar. Also supports **pure CPU** builds.
 
 ---
 My current high score: **1,192,340**. You may need a bit of [seed hunting](#seed-hunting) to beat it, but if you do let me know ^^  
@@ -18,6 +18,8 @@ Read the full write-up on my blog: [The One Million KALIEN Tape](https://kyungj.
 
 ## Performance
 
+### GPU
+
 _Ran with `--seed 0xDDB2AB13` on an NVIDIA RTX 4080._  
 VRAM usage ≈ `width × branches × 1,372 bytes` (`sizeof(Simulation) = 1,372`)
 
@@ -27,10 +29,21 @@ VRAM usage ≈ `width × branches × 1,372 bytes` (`sizeof(Simulation) = 1,372`)
 
 GPU kernel time was 11.4s, while total wall time was ~161s (~2m40s), still well within a single seed epoch for consistent >1M submissions.
 
+### CPU
+
+_Ran with `--seed 0x7A9005B7` on an Intel Core i9-14900K (24 cores, 32 threads)._
+
+| Width | Branches | Horizon | Threads | Wall Time | Score |
+|-------|----------|---------|---------|-----------|-------|
+| 16,384 | 8 | 20 | 32 | ~2m | 1,012,180 |
+
+CPU mode parallelises across all available cores via `std::thread` by default. On a modern multi-core machine it runs at comparable wall time to GPU for the default parameters.
+
 ## Build
 
-### Requirements
+### GPU build (requires CUDA)
 
+**Requirements:**
 - NVIDIA GPU (sm_75 / Turing or newer recommended)
 - CUDA Toolkit 12.x (with `nvcc` and `nvrtc`)
 - C++17 compiler: `g++` (Linux/macOS) or MSVC (Windows)
@@ -38,6 +51,17 @@ GPU kernel time was 11.4s, while total wall time was ~161s (~2m40s), still well 
 ```bash
 make
 ```
+
+### CPU build
+
+**Requirements:**
+- C++17 compiler: `g++` (Linux/macOS) or MSVC (Windows)
+
+```bash
+make CPU=1
+```
+
+The CPU binary is fully self-contained (no CUDA, NVRTC, drivers).
 
 ## Usage
 
@@ -58,7 +82,6 @@ GPU architecture is auto-detected via `nvidia-smi`. Falls back to `sm_75` if det
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--fitness <path>` | built-in | CUDA source file (.cu) for custom fitness function (JIT NVRTC compiled) |
 | `--beam <n>` | 16384 | Beam width |
 | `--branches <n>` | 8 | Branches explored (1–8) |
 | `--horizon <n>` | 20 | Lookahead depth in frames |
@@ -66,15 +89,19 @@ GPU architecture is auto-detected via `nvidia-smi`. Falls back to `sm_75` if det
 | `--wave <n>` | 7 | Lurk mode activation threshold (0 = disable) |
 | `--salt <hex\|dec>` | 0 | Salt value |
 | `--iterations <n>` | 1 | Number of runs (increments salt each time) |
-| `--device <n>` | 0 | GPU device index |
+| `--fitness <path>` | built-in | _(GPU only)_ CUDA source file (.cu) for custom fitness function (JIT NVRTC compiled) |
+| `--device <n>` | 0 | _(GPU only)_ GPU device index |
+| `--threads <n>` | 0 | _(CPU only)_ Number of threads (0 = max) |
 
-### Example
+### Examples
 
 ```bash
 ./kalien --seed 0xDDB2AB13 --out tapes/single
 ```
 
 ## Custom Fitness
+
+_(GPU builds only)_
 
 Fitness functions are compiled at runtime (JIT) using NVRTC. Write a `.cu` file implementing:
 
