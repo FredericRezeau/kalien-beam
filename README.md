@@ -99,6 +99,27 @@ GPU architecture is auto-detected via `nvidia-smi`. Falls back to `sm_75` if det
 ./kalien --seed 0xDDB2AB13 --out tapes/single
 ```
 
+## Auto Pilot Script
+
+`run.sh` automates the full loop: fetches the current seed, runs the beam search, submits tapes live as scores improve, then waits for the next seed.
+
+**Requirements:** `bash`, `curl`, `python3`
+
+```bash
+# Example: run continuously with salt 100, submit automatically
+./run.sh YOUR...ADDRESS --dir runs --salt 100
+```
+
+### Options
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--dir <path>` | `.` | Output directory for tapes/logs |
+| `--jobs <n>` | `1` | Max concurrent jobs |
+| `--salt <hex>` | `0x1` | Starting salt |
+| `--nosubmit` | off | Run without submitting |
+| `--process-name <name>` | `./kalien` | Path to kalien binary |
+
 ## Custom Fitness
 
 _(GPU builds only)_

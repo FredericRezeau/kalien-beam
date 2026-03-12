@@ -32,3 +32,4 @@ Thumbs.db
 # fitness func
 /fitness/*
 !fitness/default.cu
+!run.sh
