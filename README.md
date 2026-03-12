@@ -7,7 +7,7 @@
 
 If you want to grind KALIEN **by the million per tape**, `kalien-beam` aims your GPU deep into the asteroid belt and lets the beam search rip. No wasted shots.
 
-**kalien-beam** is a CUDA-beam search engine built for [kalien.xyz](https://kalien.xyz), a remake of the 1979 Atari classic Asteroids, warp-powered by ZK proofs on Stellar. Also supports **pure CPU** builds.
+**kalien-beam** is a C++/CUDA-beam search engine built for [kalien.xyz](https://kalien.xyz), a remake of the 1979 Atari classic Asteroids, warp-powered by ZK proofs on Stellar. The engine also supports **pure CPU** builds.
 
 ---
 My current high score: **1,192,340**. You may need a bit of [seed hunting](#seed-hunting) to beat it, but if you do let me know ^^  
@@ -41,7 +41,7 @@ CPU mode parallelises across all available cores via `std::thread` by default. O
 
 ## Build
 
-### GPU build (requires CUDA)
+### GPU build
 
 **Requirements:**
 - NVIDIA GPU (sm_75 / Turing or newer recommended)
