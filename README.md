@@ -92,6 +92,8 @@ GPU architecture is auto-detected via `nvidia-smi`. Falls back to `sm_75` if det
 | `--fitness <path>` | built-in | _(GPU only)_ CUDA source file (.cu) for custom fitness function (JIT NVRTC compiled) |
 | `--device <n>` | 0 | _(GPU only)_ GPU device index |
 | `--threads <n>` | 0 | _(CPU only)_ Number of threads (0 = max) |
+| `--replay <n>` | null | Path of the tape to replay |
+| `--from <n>` | 0 | Frame to replay from if a tape is specified |
 
 ### Examples
 
@@ -119,6 +121,8 @@ GPU architecture is auto-detected via `nvidia-smi`. Falls back to `sm_75` if det
 | `--salt <hex>` | `0x1` | Starting salt |
 | `--nosubmit` | off | Run without submitting |
 | `--process-name <name>` | `./kalien` | Path to kalien binary |
+
+All Kalien binary options are also supported and passed through directly to the underlying process.
 
 ## Custom Fitness
 

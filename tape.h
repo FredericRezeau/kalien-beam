@@ -55,6 +55,48 @@ class Tape {
         return f.good();
     }
 
+    uint8_t get(int32_t frame) const {
+        if (frame < 0 || frame >= (int32_t)frames.size()) {
+            return 0;
+        }
+        return frames[frame];
+    }
+
+    bool read(const std::string& path) {
+        std::ifstream f(path, std::ios::binary);
+        if (!f) {
+            return false;
+        }
+        std::vector<uint8_t> data((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+        if (data.size() < TAPE_HEADER_SIZE + TAPE_FOOTER_SIZE) {
+            return false;
+        }
+        auto readU32 = [&](size_t off) {
+            return (uint32_t)data[off] | ((uint32_t)data[off + 1] << 8) |
+                   ((uint32_t)data[off + 2] << 16) | ((uint32_t)data[off + 3] << 24);
+        };
+        if (readU32(0) != TAPE_MAGIC) {
+            return false;
+        }
+
+        uint32_t count = readU32(12);
+        uint32_t bytes = (count + 1) >> 1;
+        if (data.size() < TAPE_HEADER_SIZE + bytes + TAPE_FOOTER_SIZE) {
+            return false;
+        }
+
+        frames.clear();
+        frames.reserve(count);
+        for (uint32_t i = 0; i < bytes; i++) {
+            uint8_t byte = data[TAPE_HEADER_SIZE + i];
+            frames.push_back(byte & 0x0F);
+            if (frames.size() < count) {
+                frames.push_back((byte >> 4) & 0x0F);
+            }
+        }
+        return true;
+    }
+
     uint32_t len() const { return static_cast<uint32_t>(frames.size()); }
 
   private:

@@ -283,9 +283,9 @@ static void cpuRunChild(
 
 extern "C" void
 runSearchCPU(uint32_t seed, uint32_t salt, int32_t width,
-             int32_t horizon, int32_t frames, int32_t wave, int32_t branches, int32_t numThreads,
-             int32_t* outScore, uint8_t* outTape, int32_t* outFrames,
-             const std::chrono::steady_clock::time_point& start, bool trace) {
+          int32_t horizon, int32_t frames, int32_t wave, int32_t branches, int32_t numThreads,
+          int32_t* outScore, uint8_t* outTape, int32_t* outFrames,
+          const std::chrono::steady_clock::time_point& start, bool trace, const Simulation* replay = nullptr, int32_t replayFrame = 0) {
 
     if (branches < 1 || branches > CPU_MAX_BRANCHES) {
         std::fprintf(stderr, "branch count must be 1..%d\n", CPU_MAX_BRANCHES);
@@ -297,16 +297,28 @@ runSearchCPU(uint32_t seed, uint32_t salt, int32_t width,
     const int maxBytes = (frames + 1) >> 1;
 
     std::vector<Simulation> beam(width);
-    simInit(beam[0], seed);
-    for (int i = 1; i < width; i++) {
-        beam[i] = beam[0];
+    if (replay) {
+        for (int i = 0; i < width; i++) {
+            beam[i] = *replay;
+        }
+    } else {
+        simInit(beam[0], seed);
+        for (int i = 1; i < width; i++) {
+            beam[i] = beam[0];
+        }
     }
 
     std::vector<std::vector<uint8_t>> tapes(width, std::vector<uint8_t>(maxBytes, 0));
+    if (replay && replayFrame > 0) {
+        int32_t prefixBytes = (replayFrame + 1) >> 1;
+        for (int k = 0; k < width; k++) {
+            memcpy(tapes[k].data(), outTape, prefixBytes);
+        }
+    }
     std::vector<CpuChildResult> expanded(size);
 
-    int32_t roundFrames = 0;
-    int32_t pos = 0;
+    int32_t roundFrames = replayFrame;
+    int32_t pos = replayFrame;
     auto last = start;
     const unsigned int maxThreads = std::max(1u, std::thread::hardware_concurrency());
     const unsigned int threads = numThreads > 0 && numThreads < maxThreads ? numThreads : maxThreads;

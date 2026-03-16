@@ -13,6 +13,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <unordered_map>
 #include <cuda.h>
 #include <cuda_runtime.h>
 #include <vector>
@@ -260,7 +261,7 @@ __global__ void launchKernel(const Simulation* __restrict__ states, int32_t widt
         return;
     }
 
-    for (int f = 0; f < horizon && !sim.gameOver; f++) {
+   for (int f = 0; f < horizon && !sim.gameOver; f++) {
         uint8_t greedy = decide(sim, wave);
         uint8_t inp = applyBias(greedy, branch);
         int b = f >> 1;
@@ -286,7 +287,7 @@ __global__ void initKernel(Simulation* out, uint32_t seed) {
 extern "C" void
 runSearch(int device, uint32_t seed, uint32_t salt, int32_t width,
           int32_t horizon, int32_t frames, int32_t wave, int32_t branches, int32_t* outScore, uint8_t* outTape, int32_t* outFrames,
-          const std::chrono::steady_clock::time_point& start, JitKernel* jit, bool trace) {
+          const std::chrono::steady_clock::time_point& start, JitKernel* jit, bool trace, const Simulation* replay = nullptr, int32_t replayFrame = 0) {
     CUDA_CALL(cudaSetDevice(device));
     if (branches < 1 || branches > MAX_BRANCHES) {
         std::fprintf(stderr, "branch count must be 1..%d\n", MAX_BRANCHES);
@@ -311,15 +312,26 @@ runSearch(int device, uint32_t seed, uint32_t salt, int32_t width,
     std::vector<uint8_t> hNibbles((int64_t)size * bytes);
     const int maxBytes = (frames + 1) >> 1;
     std::vector<std::vector<uint8_t>> tapes(width, std::vector<uint8_t>(maxBytes, 0));
-    int32_t pos = 0;
+    if (replay && replayFrame > 0) {
+        int32_t bytes = (replayFrame + 1) >> 1;
+        for (int k = 0; k < width; k++) {
+            memcpy(tapes[k].data(), outTape, bytes);
+        }
+    }
 
-    initKernel<<<1, 1>>>(beam, seed);
-    CUDA_CALL(cudaDeviceSynchronize());
+    int32_t pos = replayFrame;
+    if (replay) {
+        CUDA_CALL(cudaMemcpy(beam, replay, sizeof(Simulation), cudaMemcpyHostToDevice));
+    } else {
+        initKernel<<<1, 1>>>(beam, seed);
+        CUDA_CALL(cudaDeviceSynchronize());
+    }
+
     for (int i = 1; i < width; i++) {
         CUDA_CALL(cudaMemcpy(beam + i, beam, sizeof(Simulation), cudaMemcpyDeviceToDevice));
     }
 
-    int32_t roundFrames = 0;
+    int32_t roundFrames = replayFrame;
     std::vector<Simulation> newBeam(width);
     std::vector<Simulation> prevBeam(width);
     int threads = 256;
@@ -370,7 +382,7 @@ runSearch(int device, uint32_t seed, uint32_t salt, int32_t width,
         std::vector<int> tops;
         prune(hFitness.data(), size, width, tops);
 
-        for (int k = 0; k < width; k++) {
+       for (int k = 0; k < width; k++) {
             newBeam[k] = hExpanded[tops[k]];
         }
 

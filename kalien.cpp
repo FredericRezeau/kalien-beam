@@ -38,12 +38,11 @@
 static inline float __fsqrt_rn(float x) { return sqrtf(x); }
 
 extern "C" void runSearch(int device, uint32_t seed, uint32_t salt, int32_t width, int32_t horizon, int32_t frames, int32_t wave,
-    int32_t branches, int32_t* outScore, uint8_t* outTape, int32_t* outFrames, const std::chrono::steady_clock::time_point& start,
-    JitKernel* jit, bool trace);
+                          int32_t branches, int32_t* outScore, uint8_t* outTape, int32_t* outFrames, const std::chrono::steady_clock::time_point& start,
+                          JitKernel* jit, bool trace, const Simulation* replay = nullptr, int32_t replayFrame = 0);
 
 #else
 
-// CPU-only build: bring in the CPU sim, no CUDA.
 #include "ports/sim.h"
 #include "tape.h"
 
@@ -51,8 +50,6 @@ extern "C" void runSearch(int device, uint32_t seed, uint32_t salt, int32_t widt
 
 // CPU kernel is always compiled in (GPU build: enables --cpu; CPU build: sole backend).
 #include "kernel.h"
-
-// ---------------------------------------------------------------------------
 
 static std::string getPath(const std::string& path, uint32_t salt, int32_t score) {
     std::string stem = path;
@@ -76,25 +73,27 @@ static bool writeTape(const std::string& path, uint32_t seed, int32_t score, con
 
 static void usage(const char* prog) {
     std::fprintf(stderr,
-        "Usage:\n"
-        "  %s --seed <hex> --out <file> [options]\n\n"
-        "Required:\n"
-        "  --seed         <hex|dec>  Kalien contract seed\n"
-        "  --out          <path>     Output tape base path (suffix _<salt>_<score>.tape added)\n\n"
-        "Options:\n"
+                 "Usage:\n"
+                 "  %s --seed <hex> --out <file> [options]\n\n"
+                 "Required:\n"
+                 "  --seed         <hex|dec>  Kalien contract seed\n"
+                 "  --out          <path>     Output tape base path (suffix _<salt>_<score>.tape added)\n\n"
+                 "Options:\n"
 #ifndef CPU_ONLY
-        "  --fitness      <path>     CUDA source file (.cu) for custom fitness function (JIT NVRTC compiled).\n"
-        "  --device       <n>        GPU device index (default: 0)\n"
-        "  --cpu                     Use CPU beam search\n"
+                 "  --fitness      <path>     CUDA source file (.cu) for custom fitness function (JIT NVRTC compiled).\n"
+                 "  --device       <n>        GPU device index (default: 0)\n"
+                 "  --cpu                     Use CPU beam search\n"
 #endif
-        "  --beam         <n>        Beam width (default: 16384)\n"
-        "  --branches     <n>        Branches explored, 1..8 (default: 8)\n"
-        "  --horizon      <n>        Lookahead depth in frames (default: 20)\n"
-        "  --frames       <n>        Total simulation frames (default: 36000)\n"
-        "  --salt         <hex|dec>  Salt value (default: 0)\n"
-        "  --wave         <n>        Lurk mode activation threshold (default: 7; 0 = disable)\n"
-        "  --threads      <n>        Number of threads (default: 0; 0 = max)\n"
-        "  --iterations   <n>        Number of runs (default: 1)\n", prog);
+                 "  --beam         <n>        Beam width (default: 16384)\n"
+                 "  --branches     <n>        Branches explored, 1..8 (default: 8)\n"
+                 "  --horizon      <n>        Lookahead depth in frames (default: 20)\n"
+                 "  --salt         <hex|dec>  Salt value (default: 0)\n"
+                 "  --threads      <n>        Number of threads (default: 0; 0 = max)\n"
+                 "  --wave         <n>        Lurk mode activation threshold (default: 7; 0 = disable)\n"
+                 "  --frames       <n>        Total simulation frames (default: 36000)\n"
+                 "  --replay       <path>     Path of the tape to replay\n"
+                 "  --from         <n>        Frame to replay from if replay is specified (default: 0)\n"
+                 "  --iterations   <n>        Number of runs (default: 1)\n", prog);
 }
 
 int main(int argc, char* argv[]) {
@@ -118,6 +117,8 @@ int main(int argc, char* argv[]) {
     int32_t threads = 0;
     std::string outPath;
     std::string fitnessPath;
+    std::string replayPath;
+    int32_t replayFrame = 0;
     bool trace = false;
 
     for (int i = 1; i < argc; i++) {
@@ -150,7 +151,11 @@ int main(int argc, char* argv[]) {
             threads = std::stoi(argv[++i]);
         } else if (!strcmp(argv[i], "--trace")) {
             trace = true;
-        } else {
+        } else if (!strcmp(argv[i], "--replay") && i + 1 < argc) {
+            replayPath = argv[++i];
+        } else if (!strcmp(argv[i], "--from") && i + 1 < argc) {
+            replayFrame = std::stoi(argv[++i]);
+        }  else {
             std::fprintf(stderr, "Unknown argument: %s\n", argv[i]);
             usage(argv[0]);
             return 1;
@@ -181,10 +186,10 @@ int main(int argc, char* argv[]) {
             cudaDeviceProp prop;
             cudaGetDeviceProperties(&prop, d);
             std::printf("[WEAPON:%d] %s compute=%d.%d SMs=%d mem=%zuMB memBW=%.0fGB/s clockMHz=%d\n",
-                d, prop.name, prop.major, prop.minor, prop.multiProcessorCount,
-                prop.totalGlobalMem / (1024 * 1024),
-                2.0 * prop.memoryClockRate * (prop.memoryBusWidth / 8) / 1e6,
-                prop.clockRate / 1000);
+                        d, prop.name, prop.major, prop.minor, prop.multiProcessorCount,
+                        prop.totalGlobalMem / (1024 * 1024),
+                        2.0 * prop.memoryClockRate * (prop.memoryBusWidth / 8) / 1e6,
+                        prop.clockRate / 1000);
         }
     }
 #endif
@@ -215,18 +220,51 @@ int main(int argc, char* argv[]) {
     uint32_t curSalt = salt;
     auto start = std::chrono::steady_clock::now();
 
+    Simulation replaySim;
+    std::vector<uint8_t> replayPrefix;
+    bool replay = false;
+    if (!replayPath.empty()) {
+        Tape replayTape;
+        if (!replayTape.read(replayPath)) {
+            std::fprintf(stderr, "Error: could not replay tape: %s\n", replayPath.c_str());
+            return 1;
+        }
+        simInit(replaySim, seed);
+        for (int32_t f = 0; f < replayFrame; f++) {
+            uint8_t inp = replayTape.get(f);
+            simStep(replaySim, inp);
+        }
+        int32_t bytes = (replayFrame + 1) >> 1;
+        replayPrefix.resize(bytes, 0);
+        for (int32_t f = 0; f < replayFrame; f++) {
+            uint8_t n = replayTape.get(f);
+            int b = f >> 1;
+            if (f & 1) {
+                replayPrefix[b] |= (n << 4);
+            } else {
+                replayPrefix[b] = n;
+            }
+        }
+        replay = true;
+        std::printf("[TIMEWARP] Replay loaded from frame %d, score=%d lives=%d\n", replayFrame, replaySim.score, replaySim.lives);
+        std::fflush(stdout);
+    }
+
     for (int32_t iter = 0; iter < iterations; iter++) {
         std::vector<uint8_t> tape(bytes, 0);
+        if (replay) {
+            memcpy(tape.data(), replayPrefix.data(), replayPrefix.size());
+        }
         int32_t outScore = 0, outFrames = 0;
 
         if (useCPU) {
             runSearchCPU(seed, curSalt, width, horizon, frames, wave, branches, threads,
-                         &outScore, tape.data(), &outFrames, start, trace);
+                         &outScore, tape.data(), &outFrames, start, trace, replay ? &replaySim : nullptr, replay ? replayFrame : 0);
         }
 #ifndef CPU_ONLY
         else {
             runSearch(device, seed, curSalt, width, horizon, frames, wave, branches,
-                      &outScore, tape.data(), &outFrames, start, jit, trace);
+                      &outScore, tape.data(), &outFrames, start, jit, trace, replay ? &replaySim : nullptr, replay ? replayFrame : 0);
         }
 #endif
 
