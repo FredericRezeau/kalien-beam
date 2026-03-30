@@ -101,28 +101,19 @@ GPU architecture is auto-detected via `nvidia-smi`. Falls back to `sm_75` if det
 ./kalien --seed 0xDDB2AB13 --out tapes/single
 ```
 
-## Auto Pilot Script
+## Auto Pilot
 
-`run.sh` automates the full loop: fetches the current seed, runs the beam search, submits tapes live as scores improve, then waits for the next seed.
+You can run the kalien-beam directly with `run.sh` included in this repo. It automates the full loop: fetches the current seed, runs the beam search, submits tapes live as scores improve.
 
-**Requirements:** `bash`, `curl`, `python3`
+Alternatively, there are now some powerful, robust and user-friendly alternatives to run the beam engine with more options:
 
-```bash
-# Example: run continuously with salt 100, submit automatically
-./run.sh YOUR...ADDRESS --dir runs --salt 100
-```
+### kalien-farmer
 
-### Options
+[kalien-farmer](https://github.com/AshFrancis/kalien-farmer) allows you to operate an automated beam search pipeline for kalien.xyz — finds optimal Asteroids gameplay, submits ZK proofs for on-chain rewards. GPU/CPU, cross-platform, web dashboard.
 
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--dir <path>` | `.` | Output directory for tapes/logs |
-| `--jobs <n>` | `1` | Max concurrent jobs |
-| `--salt <hex>` | `0x1` | Starting salt |
-| `--nosubmit` | off | Run without submitting |
-| `--process-name <name>` | `./kalien` | Path to kalien binary |
+### Kalienator
 
-All Kalien binary options are also supported and passed through directly to the underlying process.
+[Kalienator](https://github.com/Ben-Platform/kalienator) is an Effect-based CLI (TypeScript/Deno) for running your Kalien-earning operations 24x7. It handles the full cycle with retry logic and more.
 
 ## Custom Fitness
 
